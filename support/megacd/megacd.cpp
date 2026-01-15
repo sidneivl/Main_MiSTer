@@ -22,114 +22,151 @@
 static int need_reset=0;
 static uint8_t has_command = 0;
 
+// Physical CD state machine
+enum PhysicalCDState {
+	PCD_IDLE,       // No media detected
+	PCD_LOADING,    // TOC being loaded
+	PCD_OPENING,    // Signal door open/close to BIOS
+	PCD_READY       // Disc ready, BIOS in control
+};
+
 void mcd_poll()
 {
 	static uint32_t poll_timer = 0;
 	static uint8_t last_req = 255;
 	static uint8_t adj = 0;
-	static bool load_attempted = false;
-	static uint32_t mount_timer = 0;
 	static uint32_t hw_poll_timer = 0;
-	static int mount_phase = 0; // Moved to function scope
+	
+	// Physical CD state
+	static PhysicalCDState cd_state = PCD_IDLE;
+	static uint32_t load_timer = 0;
+	static bool load_attempted = false;
 
 	// Throttle hardware polling to every 500ms to prevent UI freeze
 	if (!hw_poll_timer || CheckTimer(hw_poll_timer))
 	{
 		hw_poll_timer = GetTimer(500);
 
-		if (!hasCDROMMedia(0))
+		switch (cd_state)
 		{
-			if (cdd.loaded && load_attempted)
+		case PCD_IDLE:
+			// No media → ensure NO_DISC status
+			if (!hasCDROMMedia(0))
 			{
-				cdd.Unload();
-				Info("CD Removed", 2000);
-			}
-			else if (!cdd.loaded && cdd.status != CD_STAT_NO_DISC)
-			{
-				// IDLE STATE FIX: If no media and not loaded, we MUST report NO_DISC.
-				// Otherwise, Reset() leaves us in STOP (Ready), confusing the BIOS on startup.
-				cdd.status = CD_STAT_NO_DISC;
-			}
-			load_attempted = false;
-			mount_timer = 0;
-			mount_phase = 0; // Reset phase on removal
-		}
-		else if (mount_phase > 0 || (!cdd.loaded && (getCDROMType(0) == DISC_MEGACD || getCDROMType(0) == DISC_UNKNOWN)))
-		{
-			// Physical CD inserted logic.
-			// Condition allows entry if we are ALREADY mounting (mount_phase > 0)
-			// OR if we are detecting a new disc.
-			if (!load_attempted)
-			{
-				if (!mount_timer)
+				if (cdd.loaded)
 				{
-					// Phase 0: Start Debounce (force NO_DISC to keep BIOS waiting)
+					cdd.Unload();
+					Info("CD Removed", 2000);
+					DebugLog("[MISTER] CD removed, unloading\n");
+				}
+				
+				// CRITICAL: Set NO_DISC if not loaded
+				// Reset() puts STOP, but we need NO_DISC when no media
+				if (!cdd.loaded && cdd.status != CD_STAT_NO_DISC)
+				{
 					cdd.status = CD_STAT_NO_DISC;
-					mount_phase = 0;
-					mount_timer = GetTimer(2000); // 2s spin-up
-					Info("Disc Inserted...", 2000);
 				}
-				else if (CheckTimer(mount_timer))
+				
+				load_attempted = false;
+			}
+			// Media detected → start loading
+			else if (!load_attempted && 
+			         (getCDROMType(0) == DISC_MEGACD || getCDROMType(0) == DISC_UNKNOWN))
+			{
+				cd_state = PCD_LOADING;
+				load_timer = GetTimer(100); // Small debounce
+				cdd.status = CD_STAT_NO_DISC; // Keep NO_DISC during load
+				Info("Disc Inserted...", 2000);
+				printf("\x1b[32m[MISTER] ===== DISC INSERTION DETECTED =====\x1b[0m\n");
+				printf("[MISTER] State: IDLE → LOADING\n");
+				printf("[MISTER] cdd.status = NO_DISC (0x%02X)\n", cdd.status);
+				DebugLog("[MISTER] State: IDLE → LOADING\n");
+			}
+			break;
+			
+		case PCD_LOADING:
+			// Media removed during loading
+			if (!hasCDROMMedia(0))
+			{
+				cd_state = PCD_IDLE;
+				load_attempted = false;
+				DebugLog("[MISTER] Load aborted - media removed\n");
+				break;
+			}
+			
+			// Wait for debounce timer
+			if (CheckTimer(load_timer))
+			{
+				// Attempt to load TOC
+				if (!cdd.loaded)
 				{
-					if (mount_phase == 0)
-					{
-						// Phase 1: Force Tray Open (0x05)
-						// BIOS: "Close CD Door" / "Open"
-						cdd.status = CD_STAT_OPEN;
-						mount_timer = GetTimer(2000); // Increased to 2s for visibility
-						mount_phase = 1;
-						DebugLog("[MISTER] Phase 1: OPEN (Signal: Close Door)\n");
-						Info("Close CD Door", 2000);
-					}
-					else if (mount_phase == 1)
-					{
-						// Phase 2: Load Data (Hidden under OPEN status)
-						// BIOS sees OPEN while we block to read TOC.
-						DebugLog("[MISTER] Phase 2: Loading Image (Status: OPEN)\n");
-						usleep(50000);
-						mcd_set_image(0, "");
-
-						if (cdd.loaded)
-						{
-							// Load Success -> Signal Door Closed (NO DISC)
-							cdd.status = CD_STAT_NO_DISC;
-							cdd.latency = 0;
-							mount_timer = GetTimer(500); // Wait 500ms as "No Disc" / "Tray Closed"
-							DebugLog("[MISTER] Phase 2: Load Success -> Signal NO_DISC\n");
-							mount_phase = 2;
-						}
-						else
-						{
-							// Load Failed (Drive spinning up?) -> Retry (Stay in Phase 1)
-							mount_phase = 1;
-							DebugLog("[MISTER] Phase 2: Load Fail (Spinning up?) -> Retry\n");
-							// Wait 500ms before retrying, status remains OPEN
-							mount_timer = GetTimer(500);
-						}
-					}
-					else if (mount_phase == 2)
-					{
-						// Phase 3: TOC (Checking Disc)
-						cdd.status = CD_STAT_TOC;
-						cdd.latency = 0;
-						DebugLog("[MISTER] Phase 3: TOC (Reading TOC)\n");
-						Info("Checking Disc...", 1500);
-						mount_timer = GetTimer(1500); // Hold TOC status for 1.5s
-						mount_phase = 3;
-					}
-					else if (mount_phase == 3)
-					{
-						// Phase 4: Ready/Stop
-						cdd.status = CD_STAT_STOP;
-						load_attempted = true;
-						DebugLog("[MISTER] Phase 4: STOP (Ready)\n");
-						mount_timer = 0;
-						mount_phase = 0;
-						// The Spy Log in ReadData will trigger shortly after this
-						Info("Press Start Button", 2000);
-					}
+					Info("Checking Disc...", 30000); // Long timeout, will be replaced
+					DebugLog("[MISTER] Loading TOC from physical CD...\n");
+					usleep(50000); // 50ms for drive stability
+					mcd_set_image(0, ""); // Empty string = physical CD
+				}
+				
+				if (cdd.loaded)
+				{
+					// Success! Signal OPEN first (BIOS needs to see door open/close)
+					cdd.status = CD_STAT_OPEN;
+					cdd.latency = 0;
+					cd_state = PCD_OPENING;
+					load_attempted = true;
+					load_timer = GetTimer(500); // Hold OPEN for 500ms
+					
+					printf("\x1b[32m[MISTER] ===== TOC LOADED SUCCESSFULLY =====\x1b[0m\n");
+					printf("[MISTER] State: LOADING → OPENING\n");
+					printf("[MISTER] cdd.status = OPEN (0x%02X) - signaling door\n", cdd.status);
+					printf("[MISTER] cdd.loaded = %d\n", cdd.loaded);
+					DebugLog("[MISTER] TOC loaded. State: LOADING → OPENING\n");
+					// No OSD message here, will show "Ready" after OPENING
+				}
+				else
+				{
+					// Failed, retry after 500ms
+					load_timer = GetTimer(500);
+					DebugLog("[MISTER] TOC load failed, retrying in 500ms...\n");
 				}
 			}
+			break;
+			
+		case PCD_OPENING:
+			// Hold OPEN status briefly, then transition to STOP (door closed)
+			if (!hasCDROMMedia(0))
+			{
+				cd_state = PCD_IDLE;
+				load_attempted = false;
+				DebugLog("[MISTER] State: OPENING → IDLE (media removed)\n");
+				break;
+			}
+			
+			if (CheckTimer(load_timer))
+			{
+				// Door "closed" - signal STOP (disc ready)
+				cdd.status = CD_STAT_STOP;
+				cdd.latency = 10; // Standard latency
+				cd_state = PCD_READY;
+				
+				printf("[MISTER] State: OPENING → READY\n");
+				printf("[MISTER] cdd.status = STOP (0x%02X) - door closed\n", cdd.status);
+				Info("Ready", 10000); // Long timeout, will be cleared when BIOS requests TOC
+				printf("[MISTER] BIOS should now detect disc and request TOC\n");
+				DebugLog("[MISTER] State: OPENING → READY. Status = STOP. BIOS in control.\n");
+			}
+			break;
+			
+		case PCD_READY:
+			// Media removed while ready
+			if (!hasCDROMMedia(0))
+			{
+				cd_state = PCD_IDLE;
+				load_attempted = false;
+				DebugLog("[MISTER] State: READY → IDLE (media removed)\n");
+			}
+			// In READY state, BIOS controls everything via commands
+			// We don't change status here - CommandExec() does it
+			break;
 		}
 	}
 
@@ -155,11 +192,11 @@ void mcd_poll()
 			has_command = 0;
 
 			// Log Status Sent to Core
-			// Only log if status changed or periodically to avoid spam?
-			// For now, log everything to trace handshake "blink"
-			uint8_t status_byte = (uint8_t)(s & 0xFF); // stat[1] (Report) | stat[0] (Mode/Status)
+			uint8_t status_byte = (uint8_t)(s & 0xFF);
 			uint8_t stat0_mode = status_byte & 0xF;
 			uint8_t stat1_rep = (status_byte >> 4) & 0xF;
+			printf("[CORE] < SEND STATUS: 0x%02X (loaded=%d latency=%d)\n", 
+				stat0_mode, cdd.loaded, cdd.latency);
 			DebugLog("[CORE] < SEND STATUS_WORD: %04X (Mode: %X, Rep: %X, Full: %02X)\n",
 				(int)(s & 0xFFFF), stat0_mode, stat1_rep, status_byte);
 		}
@@ -191,7 +228,20 @@ void mcd_poll()
 		cdd.SetCommand(c, 0);
 
 		// Log Command Received from Core
+		printf("[CORE] > RECV COMMAND: 0x%02X\n", (int)(c & 0xFF));
 		DebugLog("[CORE] > GET COMMAND: %02X (Arg: %02X)\n", (int)(c & 0xFF), (int)((c >> 8) & 0xFF));
+
+		// Clear "Ready" message when BIOS requests TOC (enters "Checking Disc" state)
+		uint8_t cmd = (uint8_t)(c & 0xFF);
+		static bool toc_requested = false;
+		if (cmd == 0x02 && !toc_requested) {  // CD_COMM_TOC
+			toc_requested = true;
+			Info("", 1);  // Clear OSD, BIOS shows "Checking Disc"
+			printf("[MISTER] BIOS requested TOC - clearing OSD, BIOS in control\n");
+		}
+		else if (cmd != 0x02 && toc_requested) {
+			toc_requested = false;  // Reset for next insertion
+		}
 
 		cdd.CommandExec();
 		has_command = 1;
