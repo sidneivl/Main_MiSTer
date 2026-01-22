@@ -60,6 +60,7 @@ public:
 	uint64_t GetStatus(uint8_t crc_start);
 	int SetCommand(uint64_t c, uint8_t crc_start);
 	void ForceStatSync();
+	bool IsPhysicalCD() const { return is_physical_cd; }
 
 private:
 	toc_t toc;
@@ -74,6 +75,7 @@ private:
 	int chd_audio_read_lba;
 	uint8_t stat[10];
 	uint8_t comm[10];
+	bool is_physical_cd;  // Track if loaded media is physical CD
 
 	int LoadCUE(const char* filename);
 	int LoadCHD(const char* filename);

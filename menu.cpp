@@ -2395,8 +2395,13 @@ void HandleUI(void)
 										if (!bit) mcd_set_image(0, "");
 										if (bit == 1)
 										{
+printf("[MENU DEBUG] MegaCD Reset: bit=%d\n", bit);
+											extern int eject_cdrom(int index);
+											eject_cdrom(0);  // Eject physical CD before reset
+printf("[MENU DEBUG] Calling eject_cdrom(0)...\n");
 											mcd_reset();
 											opt = "[0]";
+printf("[MENU DEBUG] eject returned, calling mcd_reset\n");
 										}
 									}
 

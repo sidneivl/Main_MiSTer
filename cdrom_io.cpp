@@ -337,3 +337,71 @@ int read_cdrom_toc(int index, CDROM_TrackInfo *tracks, int max_tracks) {
   close(fd);
   return count;
 }
+// Função para ejetar CD físico
+int eject_cdrom(int index) {
+  if (index < 0 || index >= 4) {
+    log_debug("eject_cdrom: Invalid index %d", index);
+    printf("[EJECT] eject_cdrom called with index=%d\n", index);
+    return -1;
+  }
+
+  char device[32];
+  snprintf(device, sizeof(device), "/dev/sr%d", index);
+  
+  log_debug("Attempting to eject CD from %s", device);
+  printf("[EJECT] eject_cdrom called with index=%d device=%s\n", index, device);
+  
+  int fd = open(device, O_RDONLY | O_NONBLOCK);
+  if (fd < 0) {
+    log_debug("eject_cdrom: Failed to open %s: %s", device, strerror(errno));
+    printf("[EJECT] ERROR: Failed to open %s: %s\n", device, strerror(errno));
+    return -1;
+  }
+  
+  // Try to unlock the drive first (in case it's locked)
+  ioctl(fd, CDROM_LOCKDOOR, 0);
+  
+  // Small delay to let any pending operations complete
+  usleep(100000); // 100ms
+  
+  // Eject the CD using ioctl
+  int result = ioctl(fd, CDROMEJECT);
+  if (result < 0) {
+    log_debug("eject_cdrom: CDROMEJECT failed for %s: %s", device, strerror(errno));
+    printf("[EJECT] ERROR: CDROMEJECT failed for %s: %s\n", device, strerror(errno));
+    
+    // If busy, wait a bit and retry
+    if (errno == EBUSY) {
+      printf("[EJECT] Device busy, waiting and retrying...\n");
+      close(fd);
+      usleep(500000); // 500ms
+      
+      // Retry
+      fd = open(device, O_RDONLY | O_NONBLOCK);
+      if (fd >= 0) {
+        ioctl(fd, CDROM_LOCKDOOR, 0);
+        usleep(100000);
+        result = ioctl(fd, CDROMEJECT);
+        if (result < 0) {
+          log_debug("eject_cdrom: Retry also failed: %s", strerror(errno));
+          printf("[EJECT] ERROR: Retry also failed: %s\n", strerror(errno));
+        }
+      }
+    }
+  }
+  
+  if (result >= 0) {
+    log_debug("eject_cdrom: Successfully ejected CD from %s", device);
+    printf("[EJECT] SUCCESS! CD ejected from %s\n", device);
+    
+    // Update state to reflect tray is now open
+    pthread_mutex_lock(&monitor_mutex);
+    cdrom_states[index].media_present = false;
+    cdrom_states[index].tray_open = true;
+    cdrom_states[index].disc_type = DISC_UNKNOWN;
+    pthread_mutex_unlock(&monitor_mutex);
+  }
+  
+  close(fd);
+  return result;
+}

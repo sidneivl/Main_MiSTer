@@ -28,6 +28,7 @@ cdd_t::cdd_t() {
 	chd_hunknum = -1;
 	SendData = NULL;
 	CanSendData = NULL;
+	is_physical_cd = false;  // Track if loaded media is physical CD
 
 	stat[0] = 0xB;
 	stat[1] = 0x0;
@@ -287,10 +288,12 @@ int cdd_t::Load(const char *filename)
 			}
 			printf("MCD: Physical CD Mounted via TOC. Last=%d End=%d\n", this->toc.last, this->toc.end);
 			this->loaded = 1;
+			this->is_physical_cd = true;  // Mark as physical CD
 			return 1;
 		}
 	}
 
+	this->is_physical_cd = false;  // Image file
 	if (!strncasecmp(".cue", ext, 4))
 	{
 		if (LoadCUE(filename)) {
@@ -358,6 +361,14 @@ void cdd_t::Unload()
 {
 	if (this->loaded)
 	{
+		// Eject physical CD before unloading
+		if (this->is_physical_cd)
+		{
+			extern int eject_cdrom(int index);
+			printf("[MCD] Unloading physical CD - ejecting drive\n");
+			eject_cdrom(0);
+		}
+
 		if (this->toc.chd_f)
 		{
 			chd_close(this->toc.chd_f);
@@ -381,6 +392,7 @@ void cdd_t::Unload()
 
 		this->loaded = 0;
 		this->status = CD_STAT_NO_DISC;
+		this->is_physical_cd = false;  // Reset flag
 	}
 
 	memset(&this->toc, 0x00, sizeof(this->toc));

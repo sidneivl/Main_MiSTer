@@ -220,6 +220,14 @@ void mcd_poll()
 		if (need_reset || data_in[0] == 0xFF) {
 			printf("MCD: request to reset\n");
 			DebugLog("[CORE] > REQUEST RESET\n");
+			
+			// If physical CD is loaded, unload it first (this will eject)
+			if (cdd.loaded && cdd.IsPhysicalCD()) {
+				printf("[MCD] Reset requested with physical CD - unloading and ejecting\n");
+				DebugLog("[CORE] Reset with physical CD - calling Unload() to eject\n");
+				cdd.Unload();
+			}
+			
 			need_reset = 0;
 			cdd.Reset();
 		}
