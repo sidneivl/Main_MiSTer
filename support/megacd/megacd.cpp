@@ -62,6 +62,7 @@ void mcd_poll()
 	static PhysicalCDState cd_state = PCD_IDLE;
 	static uint32_t load_timer = 0;
 	static bool load_attempted = false;
+	static bool was_menu_open = false; // Track menu state for OSD restore
 
 	// Throttle hardware polling to every 500ms to prevent UI freeze
 	if (!hw_poll_timer || CheckTimer(hw_poll_timer))
@@ -167,6 +168,25 @@ void mcd_poll()
 							mcd_set_image(0, "", toc_buffer, toc_result_count);
 						}
 					}
+				}
+				else
+				{
+					// Thread is running. Check if we need to restore OSD message.
+					bool is_menu_open = is_menu();
+					if (was_menu_open && !is_menu_open)
+					{
+						Info("Checking Disc...", 30000); // Re-assert message
+					}
+					else if (!is_menu_open && CheckTimer(load_timer)) // Periodic check (using same timer variable or create new one?)
+					{
+						// Actually load_timer is used for debounce at start, but here it's expired.
+						// We can use a different trick: check if Info message is gone?
+						// Impossible to check OSD content directly easily.
+						// But re-asserting every few seconds is safe.
+						Info("Checking Disc...", 30000); 
+						load_timer = GetTimer(2000); // Wait 2s before re-asserting to avoid flicker
+					}
+					was_menu_open = is_menu_open;
 				}
 				
 				// Check if thread finished (and it is inevitabley the correct job if we are here)
