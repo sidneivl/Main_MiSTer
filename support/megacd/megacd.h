@@ -39,6 +39,7 @@
 #define MCD_CDDA_IO_INDEX 4
 
 #include "../../cd.h"
+#include "../../cdrom_io.h"
 #include <libchdr/chd.h>
 
 class cdd_t
@@ -53,6 +54,7 @@ public:
 
 	cdd_t();
 	int Load(const char *filename);
+	int LoadPhysical(CDROM_TrackInfo* tracks, int count);
 	void Unload();
 	void Reset();
 	void Update();
@@ -92,11 +94,12 @@ private:
 
 #define CD_SCAN_SPEED 30
 
+
 //cdd.cpp
 extern cdd_t cdd;
 
 void mcd_poll();
-void mcd_set_image(int num, const char *filename);
+void mcd_set_image(int num, const char *filename, CDROM_TrackInfo* tracks = NULL, int track_count = 0);
 void mcd_reset();
 int mcd_send_data(uint8_t* buf, int len, uint8_t index);
 int mcd_can_send_data(uint8_t type);

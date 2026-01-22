@@ -242,6 +242,43 @@ int cdd_t::LoadCUE(const char* filename) {
 	return 0;
 }
 
+int cdd_t::LoadPhysical(CDROM_TrackInfo* tracks, int count) {
+	Unload();
+	
+	if (count <= 0) return 0;
+
+	// Mimic Reset() behavior to ensure clean state for new disc checks (e.g. isData)
+	this->isData = 1;
+	this->lba = 0;
+	this->index = 0;
+	this->audioLength = 0;
+
+	// Clear status history (critical for hot-swap to behave like Reset)
+	memset(this->stat, 0, sizeof(this->stat));
+	this->stat[9] = 0xF; // Default value from Reset()
+
+	this->toc.last = count;
+	this->toc.end = tracks[count - 1].end_lba + 1;
+	for (int i = 0; i < count; i++)
+	{
+		this->toc.tracks[i].start = tracks[i].start_lba;
+		this->toc.tracks[i].end = tracks[i].end_lba;
+		this->toc.tracks[i].type = tracks[i].type;
+		printf("MCD: Physical Track %d: Start %d End %d Type %d\n", i + 1,
+			tracks[i].start_lba, tracks[i].end_lba, tracks[i].type);
+	}
+	printf("MCD: Physical CD Mounted via TOC. Last=%d End=%d\n", this->toc.last, this->toc.end);
+	this->loaded = 1;
+	this->is_physical_cd = true;  // Mark as physical CD
+	
+	// Default sector size for physical
+	this->sectorSize = 2048; // Will be updated if needed? 
+	// Actually physically checking disc type might be needed if mixed mode? 
+	// For now assuming 2048 as base, ReadData handles raw if needed.
+	
+	return 1;
+}
+
 int cdd_t::Load(const char *filename)
 {
 	//char fname[1024 + 10];
@@ -252,46 +289,19 @@ int cdd_t::Load(const char *filename)
 
 	const char *ext = filename+strlen(filename)-4;
 
+	// Physical CD logic moved to LoadPhysical
+	// Keep this for backward compatibility if needed, but we prefer explicit LoadPhysical call
+	/*
 	if ((getCDROMType(0) == DISC_MEGACD || getCDROMType(0) == DISC_UNKNOWN) && hasCDROMMedia(0) && !filename[0])
 	{
 		CDROM_TrackInfo tracks[100];
 		int count = read_cdrom_toc(0, tracks, 99);
 		if (count > 0)
 		{
-			// Mimic Reset() behavior to ensure clean state for new disc checks (e.g. isData)
-			this->isData = 1;
-			this->lba = 0;
-			this->index = 0;
-			this->audioLength = 0;
-
-			// Clear status history (critical for hot-swap to behave like Reset)
-			memset(this->stat, 0, sizeof(this->stat));
-			this->stat[9] = 0xF; // Default value from Reset()
-
-			// Warm-Up Read REMOVED to prevent blocking SPI loop
-			// The BIOS will request sector 16 anyway, and ReadData handles retries.
-			// uint8_t temp_buf[2048];
-			// if (read_cdrom_sector(0, 16, temp_buf, 2048) <= 0) {
-			//   printf("MCD: Physical Mount - Drive not ready (Warm-up failed)\n");
-			//   return 0;
-			// }
-
-			this->toc.last = count;
-			this->toc.end = tracks[count - 1].end_lba + 1;
-			for (int i = 0; i < count; i++)
-			{
-				this->toc.tracks[i].start = tracks[i].start_lba;
-				this->toc.tracks[i].end = tracks[i].end_lba;
-				this->toc.tracks[i].type = tracks[i].type;
-				printf("MCD: Physical Track %d: Start %d End %d Type %d\n", i + 1,
-					tracks[i].start_lba, tracks[i].end_lba, tracks[i].type);
-			}
-			printf("MCD: Physical CD Mounted via TOC. Last=%d End=%d\n", this->toc.last, this->toc.end);
-			this->loaded = 1;
-			this->is_physical_cd = true;  // Mark as physical CD
-			return 1;
+			return LoadPhysical(tracks, count);
 		}
 	}
+	*/
 
 	this->is_physical_cd = false;  // Image file
 	if (!strncasecmp(".cue", ext, 4))

@@ -13,6 +13,8 @@
 #include "../../user_io.h"
 #include "debug_log.h"
 #include "megacd.h"
+#include <pthread.h>
+#include <unistd.h>
 
 #define SAVE_IO_INDEX 5 // fake download to trigger save loading
 
@@ -29,6 +31,25 @@ enum PhysicalCDState {
 	PCD_OPENING,    // Signal door open/close to BIOS
 	PCD_READY       // Disc ready, BIOS in control
 };
+
+static pthread_t toc_thread;
+static volatile bool toc_thread_active = false;   // true if thread is running/joined-pending
+static volatile bool toc_thread_finished = false; // set by worker when done
+static CDROM_TrackInfo toc_buffer[100];
+static int toc_result_count = 0;
+static int toc_job_id = 0;        // Current desired job ID
+static int toc_thread_job_id = 0; // Job ID of the running thread
+
+static void* toc_worker(void* arg)
+{
+	(void)arg;
+	DebugLog("[MISTER] TOC Thread: Starting read_cdrom_toc...\n");
+	toc_result_count = read_cdrom_toc(0, toc_buffer, 99);
+	DebugLog("[MISTER] TOC Thread: Finished. Count = %d\n", toc_result_count);
+	
+	toc_thread_finished = true;
+	return NULL;
+}
 
 void mcd_poll()
 {
@@ -74,6 +95,7 @@ void mcd_poll()
 			         (getCDROMType(0) == DISC_MEGACD || getCDROMType(0) == DISC_UNKNOWN))
 			{
 				cd_state = PCD_LOADING;
+				toc_job_id++; // New insertion = new job
 				load_timer = GetTimer(100); // Small debounce
 				cdd.status = CD_STAT_NO_DISC; // Keep NO_DISC during load
 				Info("Disc Inserted...", 2000);
@@ -91,21 +113,83 @@ void mcd_poll()
 				cd_state = PCD_IDLE;
 				load_attempted = false;
 				DebugLog("[MISTER] Load aborted - media removed\n");
+				
+				// Keep thread running/active until it finishes naturally, 
+				// we will clean it up in IDLE state or next polling cycle if finished.
 				break;
 			}
 			
 			// Wait for debounce timer
 			if (CheckTimer(load_timer))
 			{
-				// Attempt to load TOC
-				if (!cdd.loaded)
+				// Check for stale thread
+				if (toc_thread_active && toc_thread_job_id != toc_job_id)
 				{
-					Info("Checking Disc...", 30000); // Long timeout, will be replaced
-					DebugLog("[MISTER] Loading TOC from physical CD...\n");
-					usleep(50000); // 50ms for drive stability
-					mcd_set_image(0, ""); // Empty string = physical CD
+					if (toc_thread_finished)
+					{
+						DebugLog("[MISTER] Stale TOC thread finished. Discarding result.\n");
+						pthread_join(toc_thread, NULL);
+						toc_thread_active = false;
+						// Now loop will continue and start new thread below
+					}
+					else
+					{
+						// Still running on old job. Must wait.
+						// Status is still "Checking Disc..." (or we should update it?)
+						// Info("Busy...", 1);
+						break; // Wait for next poll
+					}
+				}
+
+				// Start thread if not active
+				if (!toc_thread_active)
+				{
+					Info("Checking Disc...", 30000); // Long timeout
+					DebugLog("[MISTER] Starting TOC background thread (Job %d)...\n", toc_job_id);
+					
+					toc_thread_finished = false;
+					if (pthread_create(&toc_thread, NULL, toc_worker, NULL) == 0)
+					{
+						toc_thread_active = true;
+						toc_thread_job_id = toc_job_id;
+					}
+					else
+					{
+						DebugLog("[MISTER] Failed to create TOC thread! Fallback to blocking.\n");
+						// Fallback: doing it blocking or just retry
+						toc_result_count = read_cdrom_toc(0, toc_buffer, 99);
+						toc_thread_finished = true; // Pretend thread finished
+						toc_thread_active = false; // We didn't really start a thread (or failed)
+						
+						// Handle immediate result below
+						if (toc_result_count > 0)
+						{
+							mcd_set_image(0, "", toc_buffer, toc_result_count);
+						}
+					}
 				}
 				
+				// Check if thread finished (and it is inevitabley the correct job if we are here)
+				if (toc_thread_active && toc_thread_finished)
+				{
+					pthread_join(toc_thread, NULL);
+					toc_thread_active = false;
+					
+					if (toc_result_count > 0)
+					{
+						DebugLog("[MISTER] TOC Thread success. Mounting image...\n");
+						mcd_set_image(0, "", toc_buffer, toc_result_count);
+					}
+					else
+					{
+						DebugLog("[MISTER] TOC Thread failed (count <= 0).\n");
+						// Just retry? Or go back to IDLE?
+						// If we stay in LOADING, we might loop.
+						// Let's retry after a delay.
+						load_timer = GetTimer(500);
+					}
+				}
+
 				if (cdd.loaded)
 				{
 					// Success! Signal OPEN first (BIOS needs to see door open/close)
@@ -122,11 +206,11 @@ void mcd_poll()
 					DebugLog("[MISTER] TOC loaded. State: LOADING → OPENING\n");
 					// No OSD message here, will show "Ready" after OPENING
 				}
-				else
+				else if (!toc_thread_active) // Only retry if thread not currently running
 				{
 					// Failed, retry after 500ms
 					load_timer = GetTimer(500);
-					DebugLog("[MISTER] TOC load failed, retrying in 500ms...\n");
+					DebugLog("[MISTER] TOC load failed/retrying...\n");
 				}
 			}
 			break;
@@ -291,7 +375,7 @@ static int mcd_load_rom(const char *basename, const char *name, int sub_index)
 	return 0;
 }
 
-void mcd_set_image(int num, const char *filename)
+void mcd_set_image(int num, const char *filename, CDROM_TrackInfo* tracks, int track_count)
 {
 	static char last_dir[1024] = {};
 
@@ -348,7 +432,19 @@ void mcd_set_image(int num, const char *filename)
 
 	if (loaded && (*filename || hasCDROMMedia(0)))
 	{
-		if (cdd.Load(filename) > 0)
+		int load_res = 0;
+		if (tracks && track_count > 0)
+		{
+			// Explicit physical load from background thread
+			load_res = cdd.LoadPhysical(tracks, track_count);
+		}
+		else
+		{
+			// Normal file load (or implicit physical check if supported by cdd.Load, currently disabled)
+			load_res = cdd.Load(filename);
+		}
+
+		if (load_res > 0)
 		{
 			cdd.status = cdd.loaded ? CD_STAT_STOP : CD_STAT_NO_DISC;
 			cdd.latency = 10;
