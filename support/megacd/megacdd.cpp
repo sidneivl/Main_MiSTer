@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 #include "../../cdrom_io.h"
 #include "../chd/mister_chd.h"
@@ -75,6 +76,13 @@ static int sgets(char *out, int sz, char **in)
 	return *out;
 }
 
+static void* eject_worker(void* arg) {
+	int index = (int)(intptr_t)arg;
+	printf("[MCD] Eject Thread: Starting eject for index %d...\n", index);
+	eject_cdrom(index);
+	printf("[MCD] Eject Thread: Eject complete.\n");
+	return NULL;
+}
 
 int cdd_t::LoadCUE(const char* filename) {
 	static char fname[1024 + 10];
@@ -372,11 +380,22 @@ void cdd_t::Unload()
 	if (this->loaded)
 	{
 		// Eject physical CD before unloading
+		// Eject physical CD before unloading
 		if (this->is_physical_cd)
 		{
-			extern int eject_cdrom(int index);
-			printf("[MCD] Unloading physical CD - ejecting drive\n");
-			eject_cdrom(0);
+			printf("[MCD] Unloading physical CD - triggering background eject\n");
+			
+			pthread_t eject_thread;
+			pthread_attr_t attr;
+			pthread_attr_init(&attr);
+			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+			
+			if (pthread_create(&eject_thread, &attr, eject_worker, (void*)(intptr_t)0) != 0) {
+				printf("[MCD] Failed to create eject thread, forcing blocking eject\n");
+				eject_cdrom(0);
+			}
+			
+			pthread_attr_destroy(&attr);
 		}
 
 		if (this->toc.chd_f)
