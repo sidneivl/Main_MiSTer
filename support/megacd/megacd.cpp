@@ -75,11 +75,13 @@ void mcd_poll()
 			// No media → ensure NO_DISC status
 			if (!hasCDROMMedia(0))
 			{
-				if (cdd.loaded)
+				// Only unload if it's a physical CD that was removed
+				// Don't unload .CHD/.CUE images!
+				if (cdd.loaded && cdd.IsPhysicalCD())
 				{
 					cdd.Unload();
 					Info("CD Removed", 2000);
-					DebugLog("[MISTER] CD removed, unloading\n");
+					DebugLog("[MISTER] Physical CD removed, unloading\n");
 				}
 				
 				// CRITICAL: Set NO_DISC if not loaded
