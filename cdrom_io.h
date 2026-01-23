@@ -22,6 +22,7 @@ struct CDROMState {
   bool present;
   bool media_present;
   bool tray_open;
+  bool toc_ready;  // Indica se TOC foi lido com sucesso
   DiscType disc_type;
   char path[32];
   time_t last_check;
@@ -52,6 +53,7 @@ void startCDROMMonitoring(CDROMStatusCallback callback);
 void stopCDROMMonitoring();
 bool isCDROMPresent(int index);
 bool isCDROMTrayOpen(int index);
+bool isCDROMTocReady(int index);
 
 // Função para ler setor do CD físico
 int read_cdrom_sector(int index, int lba, unsigned char *buffer,
@@ -59,5 +61,8 @@ int read_cdrom_sector(int index, int lba, unsigned char *buffer,
 
 // Função para ler TOC do CD físico (retorna numero de tracks, preenche array)
 int read_cdrom_toc(int index, CDROM_TrackInfo *tracks, int max_tracks);
+
+// Função para ejetar CD físico
+int eject_cdrom(int index);
 
 #endif // CDROM_IO_H

@@ -39,6 +39,7 @@
 #define MCD_CDDA_IO_INDEX 4
 
 #include "../../cd.h"
+#include "../../cdrom_io.h"
 #include <libchdr/chd.h>
 
 class cdd_t
@@ -53,13 +54,15 @@ public:
 
 	cdd_t();
 	int Load(const char *filename);
-	void Unload();
+	int LoadPhysical(CDROM_TrackInfo* tracks, int count);
+	void Unload(bool should_eject = true);
 	void Reset();
 	void Update();
 	void CommandExec();
 	uint64_t GetStatus(uint8_t crc_start);
 	int SetCommand(uint64_t c, uint8_t crc_start);
 	void ForceStatSync();
+	bool IsPhysicalCD() const { return is_physical_cd; }
 
 private:
 	toc_t toc;
@@ -74,6 +77,7 @@ private:
 	int chd_audio_read_lba;
 	uint8_t stat[10];
 	uint8_t comm[10];
+	bool is_physical_cd;  // Track if loaded media is physical CD
 
 	int LoadCUE(const char* filename);
 	int LoadCHD(const char* filename);
@@ -90,11 +94,12 @@ private:
 
 #define CD_SCAN_SPEED 30
 
+
 //cdd.cpp
 extern cdd_t cdd;
 
 void mcd_poll();
-void mcd_set_image(int num, const char *filename);
+void mcd_set_image(int num, const char *filename, CDROM_TrackInfo* tracks = NULL, int track_count = 0);
 void mcd_reset();
 int mcd_send_data(uint8_t* buf, int len, uint8_t index);
 int mcd_can_send_data(uint8_t type);
