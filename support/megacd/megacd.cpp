@@ -327,9 +327,9 @@ void mcd_poll()
 			
 			// If physical CD is loaded, unload it first (this will eject)
 			if (cdd.loaded && cdd.IsPhysicalCD()) {
-				printf("[MCD] Reset requested with physical CD - unloading and ejecting\n");
-				DebugLog("[CORE] Reset with physical CD - calling Unload() to eject\n");
-				cdd.Unload();
+				printf("[MCD] Reset requested with physical CD - unloading WITHOUT eject\n");
+				DebugLog("[CORE] Reset with physical CD - calling Unload(false)\n");
+				cdd.Unload(false);  // Don't eject on soft reset
 			}
 			
 			need_reset = 0;

@@ -112,7 +112,7 @@ void set_poll_timer()
 
 void neocd_set_image(char *filename)
 {
-	cdd.Unload();
+	cdd.Unload();  // Default: eject if physical
 	cdd.status = CD_STAT_OPEN;
 
 	if (*filename)

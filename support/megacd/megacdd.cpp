@@ -375,13 +375,12 @@ int cdd_t::Load(const char *filename)
 	return 0;
 }
 
-void cdd_t::Unload()
+void cdd_t::Unload(bool should_eject)
 {
 	if (this->loaded)
 	{
-		// Eject physical CD before unloading
-		// Eject physical CD before unloading
-		if (this->is_physical_cd)
+		// Eject physical CD apenas se solicitado
+		if (should_eject && this->is_physical_cd)
 		{
 			printf("[MCD] Unloading physical CD - triggering background eject\n");
 			
@@ -396,6 +395,10 @@ void cdd_t::Unload()
 			}
 			
 			pthread_attr_destroy(&attr);
+		}
+		else if (!should_eject && this->is_physical_cd)
+		{
+			printf("[MCD] Unloading physical CD WITHOUT ejecting (soft reset case)\n");
 		}
 
 		if (this->toc.chd_f)

@@ -55,7 +55,7 @@ public:
 	cdd_t();
 	int Load(const char *filename);
 	int LoadPhysical(CDROM_TrackInfo* tracks, int count);
-	void Unload();
+	void Unload(bool should_eject = true);
 	void Reset();
 	void Update();
 	void CommandExec();
