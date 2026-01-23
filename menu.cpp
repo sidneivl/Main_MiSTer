@@ -7023,25 +7023,66 @@ printf("[MENU DEBUG] eject returned, calling mcd_reset\n");
 					strftime(str + strlen(str), sizeof(str) - 1 - strlen(str), "%b %d %a%H:%M:%S", &tm);
 				}
 
-				int n = 8;
-				if (getNet(2)) str[n++] = 0x1d;
-				if (getNet(1)) str[n++] = 0x1c;
-				if (hci_get_route(0) >= 0) str[n++] = 4;
-				if (hasCDROMMedia(0) || hasCDROMMedia(1) || hasCDROMMedia(2) || hasCDROMMedia(3)) {
-					str[n++] = 0x98;
-					static int last_auto_load_index = -1;
-					static DiscType last_auto_load_type = DISC_UNKNOWN;
-					for(int i=0; i<4; i++) {
-						if (hasCDROMMedia(i)) {
-							DiscType type = getCDROMType(i);
-							if (type != DISC_UNKNOWN && (i != last_auto_load_index || type != last_auto_load_type)) {
-								last_auto_load_index = i;
-								last_auto_load_type = type;
-								AutoLoadCore(type);
-							}
+			int n = 8;
+			if (getNet(2)) str[n++] = 0x1d;
+			if (getNet(1)) str[n++] = 0x1c;
+			if (hci_get_route(0) >= 0) str[n++] = 4;
+			
+			// Controle do ícone de CD
+			static bool cd_icon_blink_state = false;
+			static unsigned long cd_icon_blink_timer = 0;
+			static int last_auto_load_index = -1;
+			static DiscType last_auto_load_type = DISC_UNKNOWN;
+			
+			if (hasCDROMMedia(0) || hasCDROMMedia(1) || hasCDROMMedia(2) || hasCDROMMedia(3)) {
+				bool any_toc_pending = false;
+				int ready_index = -1;
+				DiscType ready_type = DISC_UNKNOWN;
+				
+				// Verificar status de cada drive
+				for(int i=0; i<4; i++) {
+					if (hasCDROMMedia(i)) {
+						if (!isCDROMTocReady(i)) {
+							any_toc_pending = true;
+						} else if (ready_index == -1) {
+							ready_index = i;
+							ready_type = getCDROMType(i);
 						}
 					}
-				} else if (isCDROMPresent(0) || isCDROMPresent(1) || isCDROMPresent(2) || isCDROMPresent(3)) str[n++] = 0x97;
+				}
+				
+				// Ícone pisca se TOC pendente
+				if (any_toc_pending) {
+					if (!cd_icon_blink_timer || CheckTimer(cd_icon_blink_timer)) {
+						cd_icon_blink_timer = GetTimer(500); // Pisca a cada 500ms
+						cd_icon_blink_state = !cd_icon_blink_state;
+					}
+					str[n++] = cd_icon_blink_state ? 0x98 : 0x97; // Alterna preenchido/vazado
+				} else {
+					// TOC pronto - ícone fixo preenchido
+					str[n++] = 0x98;
+					cd_icon_blink_state = false;
+					cd_icon_blink_timer = 0;
+					
+					// Abre core apenas se TOC estiver pronto E não foi aberto antes
+					if (ready_index != -1 && ready_type != DISC_UNKNOWN) {
+						if (ready_index != last_auto_load_index || ready_type != last_auto_load_type) {
+							last_auto_load_index = ready_index;
+							last_auto_load_type = ready_type;
+							AutoLoadCore(ready_type);
+						}
+					}
+				}
+			} else if (isCDROMPresent(0) || isCDROMPresent(1) || isCDROMPresent(2) || isCDROMPresent(3)) {
+				str[n++] = 0x97; // Ícone vazado (drive presente, sem mídia)
+				cd_icon_blink_state = false;
+				cd_icon_blink_timer = 0;
+			} else {
+				// Nenhum drive presente - resetar estado
+				cd_icon_blink_state = false;
+				cd_icon_blink_timer = 0;
+			}
+
 				if (user_io_get_sdram_cfg() & 0x8000)
 				{
 					switch (user_io_get_sdram_cfg() & 7)

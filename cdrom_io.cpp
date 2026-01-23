@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <cstdlib>
 
 #ifndef CDROM_DRIVE_STATUS
 #define CDROM_DRIVE_STATUS 0x5326
@@ -25,6 +26,11 @@ static bool monitoring_active = false;
 static pthread_t monitor_thread;
 static CDROMStatusCallback active_callback = nullptr;
 static pthread_mutex_t monitor_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Thread de leitura de TOC
+static pthread_t toc_threads[4] = {};
+static bool toc_thread_active[4] = {false, false, false, false};
+static pthread_mutex_t toc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Logging Helper
 void log_debug(const char *fmt, ...) {
@@ -92,6 +98,61 @@ static DiscType identify_disc(int fd) {
   return DISC_UNKNOWN;
 }
 
+// Estrutura para passar dados para a thread de TOC
+struct TOCThreadData {
+  int index;
+  char path[32];
+};
+
+// Thread para ler TOC em background
+static void* toc_reader_thread(void* arg) {
+  TOCThreadData* data = (TOCThreadData*)arg;
+  int index = data->index;
+  char path[32];
+  strcpy(path, data->path);
+  free(data);
+
+  log_debug("[TOC Thread %d] Starting background TOC read for %s", index, path);
+
+  // 1. Identificar tipo de disco
+  int fd = open(path, O_RDONLY | O_NONBLOCK);
+  if (fd < 0) {
+    log_debug("[TOC Thread %d] Failed to open device: %s", index, strerror(errno));
+    pthread_mutex_lock(&toc_mutex);
+    toc_thread_active[index] = false;
+    pthread_mutex_unlock(&toc_mutex);
+    return NULL;
+  }
+
+  DiscType disc_type = identify_disc(fd);
+  close(fd);
+
+  pthread_mutex_lock(&monitor_mutex);
+  cdrom_states[index].disc_type = disc_type;
+  pthread_mutex_unlock(&monitor_mutex);
+
+  log_debug("[TOC Thread %d] Disc type identified: %d", index, disc_type);
+
+  // 2. Ler TOC (se tipo conhecido)
+  if (disc_type != DISC_UNKNOWN) {
+    CDROM_TrackInfo tracks[100];
+    int track_count = read_cdrom_toc(index, tracks, 100);
+    log_debug("[TOC Thread %d] TOC read complete. Tracks: %d", index, track_count);
+  }
+
+  // 3. Marcar TOC como pronto
+  pthread_mutex_lock(&monitor_mutex);
+  cdrom_states[index].toc_ready = true;
+  pthread_mutex_unlock(&monitor_mutex);
+
+  pthread_mutex_lock(&toc_mutex);
+  toc_thread_active[index] = false;
+  pthread_mutex_unlock(&toc_mutex);
+
+  log_debug("[TOC Thread %d] Completed successfully", index);
+  return NULL;
+}
+
 // Verifica mudanças no estado de um CD-ROM específico
 bool check_cdrom_state(int index) {
   char path[32];
@@ -111,37 +172,63 @@ bool check_cdrom_state(int index) {
       if (status == CDS_DISC_OK) {
         current_media = true;
         current_tray_open = false;
-        if (!cdrom_states[index].media_present) {
-          cdrom_states[index].disc_type = identify_disc(fd);
-        }
+        // NÃO identificar aqui - será feito em background
       } else if (status == CDS_TRAY_OPEN) {
         current_media = false;
         current_tray_open = true;
         cdrom_states[index].disc_type = DISC_UNKNOWN;
+        cdrom_states[index].toc_ready = false;
       } else {
         current_tray_open = false;
         cdrom_states[index].disc_type = DISC_UNKNOWN;
+        cdrom_states[index].toc_ready = false;
       }
       close(fd);
     }
   } else {
     cdrom_states[index].disc_type = DISC_UNKNOWN;
+    cdrom_states[index].toc_ready = false;
     current_tray_open = false;
   }
 
   if (currently_present != cdrom_states[index].present ||
       current_media != cdrom_states[index].media_present ||
       current_tray_open != cdrom_states[index].tray_open) {
-    // Re-eval change detection:
-
-    // Note: We are not notifying on tray change yet in the callback
-    // specifically unless it affects media_present, but we are updating the
-    // state struct.
 
     cdrom_states[index].present = currently_present;
     cdrom_states[index].media_present = current_media;
     cdrom_states[index].tray_open = current_tray_open;
     strcpy(cdrom_states[index].path, path);
+
+    // Se novo disco detectado, iniciar thread de TOC
+    if (current_media && !cdrom_states[index].toc_ready) {
+      pthread_mutex_lock(&toc_mutex);
+      // Cancelar thread anterior se ainda ativa
+      if (toc_thread_active[index]) {
+        pthread_cancel(toc_threads[index]);
+        pthread_join(toc_threads[index], NULL);
+        toc_thread_active[index] = false;
+      }
+      pthread_mutex_unlock(&toc_mutex);
+
+      // Resetar estado
+      cdrom_states[index].disc_type = DISC_UNKNOWN;
+      cdrom_states[index].toc_ready = false;
+
+      // Criar thread para ler TOC
+      TOCThreadData* data = (TOCThreadData*)malloc(sizeof(TOCThreadData));
+      data->index = index;
+      strcpy(data->path, path);
+
+      pthread_mutex_lock(&toc_mutex);
+      toc_thread_active[index] = true;
+      pthread_create(&toc_threads[index], NULL, toc_reader_thread, data);
+      pthread_detach(toc_threads[index]);  // Detach para auto-cleanup
+      pthread_mutex_unlock(&toc_mutex);
+
+      log_debug("[CDROM %d] Started background TOC reading thread", index);
+    }
+
     return true;
   }
 
@@ -218,6 +305,12 @@ DiscType getCDROMType(int index) {
   if (index < 0 || index >= 4)
     return DISC_UNKNOWN;
   return cdrom_states[index].disc_type;
+}
+
+bool isCDROMTocReady(int index) {
+  if (index < 0 || index >= 4)
+    return false;
+  return cdrom_states[index].toc_ready;
 }
 
 // Read raw sector from CD-ROM
@@ -399,6 +492,7 @@ int eject_cdrom(int index) {
     cdrom_states[index].media_present = false;
     cdrom_states[index].tray_open = true;
     cdrom_states[index].disc_type = DISC_UNKNOWN;
+    cdrom_states[index].toc_ready = false;
     pthread_mutex_unlock(&monitor_mutex);
   }
   
