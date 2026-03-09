@@ -57,9 +57,9 @@ void log_debug(const char *fmt, ...) {
 }
 
 // Helper to identify disc type
-static DiscType identify_disc(int fd) {
+static PhysicalDiscType identify_disc(int fd) {
   unsigned char buffer[2352]; // Buffer for one sector
-  DiscType type = DISC_UNKNOWN;
+  PhysicalDiscType type = DISC_UNKNOWN;
 
   // 1. Check Sector 0 (LBA 0) for SEGA/SATURN/NEO-GEO
   lseek(fd, 0, SEEK_SET);
@@ -124,7 +124,7 @@ static void* toc_reader_thread(void* arg) {
     return NULL;
   }
 
-  DiscType disc_type = identify_disc(fd);
+  PhysicalDiscType disc_type = identify_disc(fd);
   close(fd);
 
   pthread_mutex_lock(&monitor_mutex);
@@ -242,15 +242,12 @@ static void *cdrom_monitor_thread(void *arg) {
 
   while (monitoring_active) {
     for (int i = 0; i < 4; i++) {
-      bool old_state = cdrom_states[i].present;
       if (check_cdrom_state(i)) {
-        if (old_state != cdrom_states[i].present) {
-          pthread_mutex_lock(&monitor_mutex);
-          if (active_callback) {
-            active_callback(i, cdrom_states[i].present);
-          }
-          pthread_mutex_unlock(&monitor_mutex);
+        pthread_mutex_lock(&monitor_mutex);
+        if (active_callback) {
+          active_callback(i, cdrom_states[i].present);
         }
+        pthread_mutex_unlock(&monitor_mutex);
       }
     }
     sleep(CHECK_INTERVAL);
@@ -301,7 +298,7 @@ bool hasCDROMMedia(int index) {
   return cdrom_states[index].media_present;
 }
 
-DiscType getCDROMType(int index) {
+PhysicalDiscType getCDROMType(int index) {
   if (index < 0 || index >= 4)
     return DISC_UNKNOWN;
   return cdrom_states[index].disc_type;

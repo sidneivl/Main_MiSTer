@@ -5937,8 +5937,6 @@ void key_update_frames_held()
 
 int input_poll(int getchar)
 {
-
-	static int poll_cnt = 0;
 	PROFILE_FUNCTION();
 	static bool autofire_cfg_parsed = false;
  	if (!autofire_cfg_parsed) autofire_cfg_parsed = parse_autofire_cfg();

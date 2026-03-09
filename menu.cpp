@@ -100,7 +100,7 @@ static void FindLatestCore(const char* core_name, char* out_path) {
 	}
 }
 
-void AutoLoadCore(DiscType type) {
+void AutoLoadCore(PhysicalDiscType type) {
 	const char* core_name = nullptr;
 	switch(type) {
 		case DISC_MEGACD: core_name = "MegaCD"; break;
@@ -2549,13 +2549,10 @@ void HandleUI(void)
 										if (!bit) mcd_set_image(0, "");
 										if (bit == 1)
 										{
-printf("[MENU DEBUG] MegaCD Reset: bit=%d\n", bit);
 											extern int eject_cdrom(int index);
 											eject_cdrom(0);  // Eject physical CD before reset
-printf("[MENU DEBUG] Calling eject_cdrom(0)...\n");
 											mcd_reset();
 											opt = "[0]";
-printf("[MENU DEBUG] eject returned, calling mcd_reset\n");
 										}
 									}
 
@@ -7655,12 +7652,12 @@ printf("[MENU DEBUG] eject returned, calling mcd_reset\n");
 			static bool cd_icon_blink_state = false;
 			static unsigned long cd_icon_blink_timer = 0;
 			static int last_auto_load_index = -1;
-			static DiscType last_auto_load_type = DISC_UNKNOWN;
+			static PhysicalDiscType last_auto_load_type = DISC_UNKNOWN;
 			
 			if (hasCDROMMedia(0) || hasCDROMMedia(1) || hasCDROMMedia(2) || hasCDROMMedia(3)) {
 				bool any_toc_pending = false;
 				int ready_index = -1;
-				DiscType ready_type = DISC_UNKNOWN;
+				PhysicalDiscType ready_type = DISC_UNKNOWN;
 				
 				// Verificar status de cada drive
 				for(int i=0; i<4; i++) {

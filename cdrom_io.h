@@ -9,7 +9,7 @@
 // Tipo de callback para notificação de mudanças
 typedef void (*CDROMStatusCallback)(int index, bool present);
 
-enum DiscType {
+enum PhysicalDiscType {
   DISC_UNKNOWN = 0,
   DISC_MEGACD,
   DISC_SATURN,
@@ -23,7 +23,7 @@ struct CDROMState {
   bool media_present;
   bool tray_open;
   bool toc_ready;  // Indica se TOC foi lido com sucesso
-  DiscType disc_type;
+  PhysicalDiscType disc_type;
   char path[32];
   time_t last_check;
 };
@@ -45,7 +45,7 @@ const int CHECK_INTERVAL = 2; // Intervalo em segundos entre verificações
 // Funções
 bool check_cdrom_state(int index);
 bool hasCDROMMedia(int index);
-DiscType getCDROMType(int index);
+PhysicalDiscType getCDROMType(int index);
 int isCDROMPresent();
 
 // Funções de monitoramento hot-plug

@@ -271,7 +271,7 @@ int cdd_t::LoadPhysical(CDROM_TrackInfo* tracks, int count) {
 	{
 		this->toc.tracks[i].start = tracks[i].start_lba;
 		this->toc.tracks[i].end = tracks[i].end_lba;
-		this->toc.tracks[i].type = tracks[i].type;
+		this->toc.tracks[i].type = (TrackType)tracks[i].type;
 		printf("MCD: Physical Track %d: Start %d End %d Type %d\n", i + 1,
 			tracks[i].start_lba, tracks[i].end_lba, tracks[i].type);
 	}
@@ -1069,7 +1069,7 @@ int cdd_t::ReadCDDA(uint8_t *buf)
 		return this->audioLength;
 	}
 
-	DiscType cd_type = getCDROMType(0); // Assume drive 0
+	PhysicalDiscType cd_type = getCDROMType(0); // Assume drive 0
 	if ((cd_type == DISC_MEGACD || cd_type == DISC_UNKNOWN) && hasCDROMMedia(0))
 	{
 		int read_len = read_cdrom_sector(0, this->chd_audio_read_lba, buf, this->audioLength);
