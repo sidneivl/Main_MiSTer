@@ -64,7 +64,7 @@ static const ini_var_t ini_vars[] =
 	{ "FB_SIZE", (void*)(&(cfg.fb_size)), UINT8, 0, 4 },
 	{ "FB_TERMINAL", (void*)(&(cfg.fb_terminal)), UINT8, 0, 1 },
 	{ "OSD_TIMEOUT", (void*)(&(cfg.osd_timeout)), INT16, 0, 3600 },
-	{ "DIRECT_VIDEO", (void*)(&(cfg.direct_video)), UINT8, 0, 1 },
+	{ "DIRECT_VIDEO", (void*)(&(cfg.direct_video)), UINT8, 0, 2 },
 	{ "OSD_ROTATE", (void*)(&(cfg.osd_rotate)), UINT8, 0, 2 },
 	{ "DEADZONE", (void*)(&(cfg.controller_deadzone)), STRINGARR, sizeof(cfg.controller_deadzone) / sizeof(*cfg.controller_deadzone), sizeof(*cfg.controller_deadzone) },
 	{ "GAMEPAD_DEFAULTS", (void*)(&(cfg.gamepad_defaults)), UINT8, 0, 1 },
@@ -109,6 +109,7 @@ static const ini_var_t ini_vars[] =
 	{ "VRR_MAX_FRAMERATE", (void *)(&(cfg.vrr_max_framerate)), UINT8, 0, 255 },
 	{ "VRR_VESA_FRAMERATE", (void *)(&(cfg.vrr_vesa_framerate)), UINT8, 0, 255 },
 	{ "VIDEO_OFF", (void*)(&(cfg.video_off)), INT16, 0, 3600 },
+	{ "VIDEO_OFF_HDMI", (void*)(&(cfg.video_off_hdmi)), UINT8, 0, 1 },
 	{ "PLAYER_1_CONTROLLER", (void*)(&(cfg.player_controller[0])), STRINGARR, sizeof(cfg.player_controller[0]) / sizeof(cfg.player_controller[0][0]), sizeof(cfg.player_controller[0][0]) },
 	{ "PLAYER_2_CONTROLLER", (void*)(&(cfg.player_controller[1])), STRINGARR, sizeof(cfg.player_controller[0]) / sizeof(cfg.player_controller[0][0]), sizeof(cfg.player_controller[0][0]) },
 	{ "PLAYER_3_CONTROLLER", (void*)(&(cfg.player_controller[2])), STRINGARR, sizeof(cfg.player_controller[0]) / sizeof(cfg.player_controller[0][0]), sizeof(cfg.player_controller[0][0]) },
@@ -130,7 +131,11 @@ static const ini_var_t ini_vars[] =
 	{ "OSD_LOCK", (void*)(&(cfg.osd_lock)), STRING, 0, sizeof(cfg.osd_lock) - 1 },
 	{ "OSD_LOCK_TIME", (void*)(&(cfg.osd_lock_time)), UINT16, 0, 60 },
 	{ "DEBUG", (void *)(&(cfg.debug)), UINT8, 0, 1 },
+	{ "LOOKAHEAD", (void *)(&(cfg.lookahead)), UINT8, 0, 3 },
 	{ "MAIN", (void*)(&(cfg.main)), STRING, 0, sizeof(cfg.main) - 1 },
+	{"VFILTER_INTERLACE_DEFAULT", (void*)(&(cfg.vfilter_interlace_default)), STRING, 0, sizeof(cfg.vfilter_interlace_default) - 1 },
+	{ "AUTOFIRE_RATES", (void *)(&(cfg.autofire_rates)), STRING, 0, sizeof(cfg.autofire_rates) - 1 },
+
 };
 
 static const int nvars = (int)(sizeof(ini_vars) / sizeof(ini_var_t));
@@ -571,6 +576,7 @@ const char* cfg_get_label(uint8_t alt)
 void cfg_parse()
 {
 	memset(&cfg, 0, sizeof(cfg));
+	cfg.csync = 1;
 	cfg.bootscreen = 1;
 	cfg.fb_terminal = 1;
 	cfg.controller_info = 6;
@@ -579,6 +585,7 @@ void cfg_parse()
 	cfg.rumble = 1;
 	cfg.wheel_force = 50;
 	cfg.dvi_mode = 2;
+	cfg.lookahead = 2;
 	cfg.hdr = 0;
 	cfg.hdr_max_nits = 1000;
 	cfg.hdr_avg_nits = 250;
@@ -591,6 +598,7 @@ void cfg_parse()
 	has_video_sections = false;
 	using_video_section = false;
 	cfg_error_count = 0;
+	strcpy(cfg.autofire_rates, "10,15,30");
 	ini_parse(altcfg(), video_get_core_mode_name(1));
 	if (has_video_sections && !using_video_section)
 	{
@@ -604,6 +612,12 @@ void cfg_parse()
 		if (!strcasecmp(cfg.vga_mode, "ypbpr")) cfg.vga_mode_int = 1;
 		if (!strcasecmp(cfg.vga_mode, "svideo")) cfg.vga_mode_int = 2;
 		if (!strcasecmp(cfg.vga_mode, "cvbs")) cfg.vga_mode_int = 3;
+		if (!strcasecmp(cfg.vga_mode, "subcarrier"))
+		{
+			cfg.vga_mode_int = 4;
+			cfg.csync = 1;
+			cfg.forced_scandoubler = 0;
+		}
 	}
 }
 

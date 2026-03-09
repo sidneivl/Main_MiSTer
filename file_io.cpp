@@ -461,7 +461,19 @@ int FileOpenEx(fileTYPE *file, const char *name, int mode, char mute, int use_zi
 			if(!mute) printf("FileOpenEx(open) File:%s, error: %s.\n", full_path, strerror(errno));
 			return 0;
 		}
-		const char *fmode = mode & O_RDWR ? "w+" : "r";
+		const char *fmode;
+
+		switch (mode & O_ACCMODE) {
+		case O_RDONLY:
+			fmode = "r";
+			break;
+		case O_WRONLY:
+			fmode = "w";
+			break;
+		default:
+			fmode = "w+";
+			break;
+		}
 		file->filp = fdopen(fd, fmode);
 		if (!file->filp)
 		{
@@ -904,9 +916,11 @@ void FileGenerateSavePath(const char *name, char* out_name, int ext_replace)
 
 void FileGenerateSavestatePath(const char *name, char* out_name, int sufx)
 {
-	create_path(SAVESTATE_DIR, CoreName2);
+	const char *subdir = is_arcade() ? "Arcade" : CoreName2;
 
-	sprintf(out_name, "%s/%s/", SAVESTATE_DIR, CoreName2);
+	create_path(SAVESTATE_DIR, subdir);
+
+	sprintf(out_name, "%s/%s/", SAVESTATE_DIR, subdir);
 	char *fname = out_name + strlen(out_name);
 
 	const char *p = strrchr(name, '/');
@@ -1623,7 +1637,14 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 					//skip non-selectable files
 					if (!strcasecmp(de->d_name, "menu.rbf")) continue;
 					if (!strncasecmp(de->d_name, "menu_20", 7)) continue;
-					if (!strcasecmp(de->d_name, "boot.rom")) continue;
+					if (!strncasecmp(de->d_name, "boot", 4))
+					{
+						int len = strlen(de->d_name);
+						if ((len == 8 || (len == 9 && de->d_name[4] >= '0' && de->d_name[4] <= '9')) && !strcasecmp(de->d_name + len - 4, ".rom"))
+						{
+							continue;
+						}
+					}
 
 					//check the prefix if given
 					if (prefix && strncasecmp(prefix, de->d_name, strlen(prefix))) continue;
@@ -1756,7 +1777,8 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 			if(iSelectedEntry + 1 < flist_nDirEntries()) // scroll within visible items
 			{
 				iSelectedEntry++;
-				if (iSelectedEntry > iFirstEntry + OsdGetSize() - 1) iFirstEntry = iSelectedEntry - OsdGetSize() + 1;
+				// Start scrolling when cursor is cfg.lookahead positions from bottom
+				if (iSelectedEntry > iFirstEntry + OsdGetSize() - (cfg.lookahead + 1)) iFirstEntry = iSelectedEntry - OsdGetSize() + (cfg.lookahead + 1);
 			}
             else
             {
@@ -1771,45 +1793,105 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 			if (iSelectedEntry > 0) // scroll within visible items
 			{
 				iSelectedEntry--;
-				if (iSelectedEntry < iFirstEntry) iFirstEntry = iSelectedEntry;
+				// Start scrolling when cursor is cfg.lookahead positions from top
+				if (iSelectedEntry < iFirstEntry + cfg.lookahead) iFirstEntry = iSelectedEntry - cfg.lookahead;
+				if (iFirstEntry < 0) iFirstEntry = 0;
 			}
             return 0;
 		}
 		else if (mode == SCANF_NEXT_PAGE)
 		{
-			if (iSelectedEntry < iFirstEntry + OsdGetSize() - 2)
+			// Calculate cursor position relative to current page
+			int cursor_offset = iSelectedEntry - iFirstEntry;
+			
+			// Check if we're already on the last page (less than a full page left)
+			int remaining_entries = flist_nDirEntries() - iFirstEntry;
+			if (remaining_entries <= OsdGetSize())
 			{
-				iSelectedEntry = iFirstEntry + OsdGetSize() - 1;
-				if (iSelectedEntry >= flist_nDirEntries()) iSelectedEntry = flist_nDirEntries() - 1;
+				// On last page - allow cursor to go to actual last row
+				iSelectedEntry = flist_nDirEntries() - 1;
+				iFirstEntry = flist_nDirEntries() - OsdGetSize();
+				if (iFirstEntry < 0) iFirstEntry = 0;
 			}
 			else
 			{
-				iSelectedEntry += OsdGetSize();
+				// Move to next page
 				iFirstEntry += OsdGetSize();
-				if (iSelectedEntry >= flist_nDirEntries())
+				if (iFirstEntry >= flist_nDirEntries())
 				{
-					iSelectedEntry = flist_nDirEntries() - 1;
-					iFirstEntry = iSelectedEntry - OsdGetSize() + 1;
-					if (iFirstEntry < 0) iFirstEntry = 0;
-				}
-				else if (iFirstEntry + OsdGetSize() > flist_nDirEntries())
-				{
+					// At end, stay on last page
 					iFirstEntry = flist_nDirEntries() - OsdGetSize();
+					if (iFirstEntry < 0) iFirstEntry = 0;
+					iSelectedEntry = flist_nDirEntries() - 1;
+				}
+				else
+				{
+					// Special handling for top row - jump to cfg.lookahead positions from bottom
+					if (cursor_offset == 0)
+					{
+						iSelectedEntry = iFirstEntry + OsdGetSize() - (cfg.lookahead + 1);
+					}
+					else
+					{
+						// Maintain relative cursor position, but respect cfg.lookahead buffer from bottom
+						iSelectedEntry = iFirstEntry + cursor_offset;
+						
+						// If cursor would be on bottom cfg.lookahead rows of page, keep it at cfg.lookahead from bottom
+						if (cursor_offset >= OsdGetSize() - cfg.lookahead)
+						{
+							iSelectedEntry = iFirstEntry + OsdGetSize() - (cfg.lookahead + 1);
+						}
+					}
+					
+					// Ensure we don't go past the end
+					if (iSelectedEntry >= flist_nDirEntries())
+					{
+						iSelectedEntry = flist_nDirEntries() - 1;
+					}
 				}
 			}
 			return 0;
 		}
 		else if (mode == SCANF_PREV_PAGE)
 		{
-			if(iSelectedEntry != iFirstEntry)
+			// Calculate cursor position relative to current page
+			int cursor_offset = iSelectedEntry - iFirstEntry;
+			
+			// Check if we're already on the first page (less than a full page to go back)
+			if (iFirstEntry <= OsdGetSize())
 			{
-				iSelectedEntry = iFirstEntry;
+				// On first page - allow cursor to go to actual first row
+				iSelectedEntry = 0;
+				iFirstEntry = 0;
 			}
 			else
 			{
+				// Move to previous page
 				iFirstEntry -= OsdGetSize();
 				if (iFirstEntry < 0) iFirstEntry = 0;
-				iSelectedEntry = iFirstEntry;
+				
+				// Special handling for bottom row - jump to cfg.lookahead from top
+				if (cursor_offset == OsdGetSize() - 1)
+				{
+					iSelectedEntry = iFirstEntry + cfg.lookahead;
+				}
+				else
+				{
+					// Maintain relative cursor position, but respect cfg.lookahead buffer from top
+					iSelectedEntry = iFirstEntry + cursor_offset;
+					
+					// If cursor would be on top cfg.lookahead rows of page, keep it at cfg.lookahead from top
+					if (cursor_offset <= cfg.lookahead - 1)
+					{
+						iSelectedEntry = iFirstEntry + cfg.lookahead;
+					}
+				}
+				
+				// Ensure we don't go past the end
+				if (iSelectedEntry >= flist_nDirEntries())
+				{
+					iSelectedEntry = flist_nDirEntries() - 1;
+				}
 			}
 		}
 		else if (mode == SCANF_SET_ITEM)
@@ -1833,6 +1915,80 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 				iSelectedEntry = pos;
 				if (iSelectedEntry + (OsdGetSize() / 2) >= flist_nDirEntries()) iFirstEntry = flist_nDirEntries() - OsdGetSize();
 				else iFirstEntry = iSelectedEntry - (OsdGetSize() / 2) + 1;
+				if (iFirstEntry < 0) iFirstEntry = 0;
+			}
+		}
+		else if (mode == SCANF_NEXT_CHAR)
+		{
+			//DirItem is sorted, so just advance until the first character changes.
+			//if we reach the end before that don't change anything.
+			//If we change d_type also consider that 'next'. This means next
+			//advances through directories, and then advances through files
+			//
+			int found = -1;
+			char curdType = DirItem[iSelectedEntry].de.d_type;
+			char curChar = DirItem[iSelectedEntry].altname[0]; 
+			if ((curChar == '_') && (curdType == DT_DIR) && (options & SCANO_CORES))
+				curChar = DirItem[iSelectedEntry].altname[1];
+			curChar = toupper(curChar);
+
+			for (int i = iSelectedEntry+1; i < flist_nDirEntries(); i++)
+			{
+				char tryChar = DirItem[i].altname[0];
+				if ((tryChar == '_') && (DirItem[i].de.d_type == DT_DIR) && (options & SCANO_CORES))
+					tryChar = DirItem[i].altname[1];
+				if (toupper(tryChar) != curChar || DirItem[i].de.d_type != curdType)
+				{
+					found = i;
+					break;
+				}
+			}
+			if (found >= 0)
+			{
+				iSelectedEntry = found;
+				if (iSelectedEntry + (OsdGetSize() / 2) >= flist_nDirEntries()) iFirstEntry = flist_nDirEntries() - OsdGetSize();
+				else iFirstEntry = iSelectedEntry - (OsdGetSize()/2) + 1;
+				if (iFirstEntry < 0) iFirstEntry = 0;
+			}
+		}
+		else if (mode == SCANF_PREV_CHAR)
+		{
+			//Previous seek seeks to the FIRST entry that starts with the previous letter
+			//Search backward until the first char changes, and then continue looking backward
+			//until it changes again. 
+
+
+			int found = -1;
+			char curdType = DirItem[iSelectedEntry].de.d_type;
+			bool sawChange = false;
+			char curChar = DirItem[iSelectedEntry].altname[0]; 
+			if ((curChar == '_') && (curdType == DT_DIR) && (options & SCANO_CORES))
+				curChar = DirItem[iSelectedEntry].altname[1];
+			curChar = toupper(curChar);
+			for (int i = iSelectedEntry-1; i >= 0; i--)
+			{
+				char tryChar = DirItem[i].altname[0];
+				if ((tryChar == '_') && (DirItem[i].de.d_type == DT_DIR) && (options & SCANO_CORES))
+					tryChar = DirItem[i].altname[1];
+				if (toupper(tryChar) != curChar || DirItem[i].de.d_type != curdType)
+				{
+					if (sawChange)
+					{
+						found = i+1;
+						break;
+					}
+					sawChange = true;
+					curChar = DirItem[i].altname[0];
+					if (curChar == '_')
+						curChar = DirItem[i].altname[1];
+					curChar = toupper(curChar);
+				}
+			}
+			if (found >= 0)
+			{
+				iSelectedEntry = found;
+				if (iSelectedEntry + (OsdGetSize() / 2) >= flist_nDirEntries()) iFirstEntry = flist_nDirEntries() - OsdGetSize();
+				else iFirstEntry = iSelectedEntry - (OsdGetSize()/2) + 1;
 				if (iFirstEntry < 0) iFirstEntry = 0;
 			}
 		}
